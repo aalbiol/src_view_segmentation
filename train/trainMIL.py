@@ -60,13 +60,14 @@ if __name__ == "__main__":
         device='cpu'
         gpu=0
    
+    model = ConstrainedSegmentMIL(config) # It loads initial weights if specified in config file
     datamodule =  DataModule(config)
         
     print('Categories:',datamodule.categories)
 
-    means_norm=datamodule.mean_norm.tolist()
+    means_norm=datamodule.means_norm.tolist()
     stds_norm=datamodule.stds_norm.tolist()
-    size_rect=str(datamodule.size_rect)
+    
  
     dict_norm={'means_norm': means_norm, 'stds_norm': stds_norm }
     
@@ -79,7 +80,7 @@ if __name__ == "__main__":
     miwandb= WandbLogger(name=logname, project=project,config=config)
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
     callbacks4=[lr_monitor, 
-                FeatureExtractorFreezeUnfreeze(unfreeze_at_epoch=config['unfreeze_epoch'],initial_denom_lr=1)]
+                FeatureExtractorFreezeUnfreeze(unfreeze_at_epoch=config['train']['unfreeze_epoch'],initial_denom_lr=1)]
     num_epochs=config['train']['epochs']
     trainer_args = {'max_epochs': num_epochs, 'logger' : miwandb}
 

@@ -143,8 +143,10 @@ def my_collate_fn(data): # Crear batch a partir de lista de casos
     bin_masks: lista de batch_size elementos
     '''
     images = [d[0] for d in data]
+    # tams=[im.size()  for im in images]
+    # print("Tamaños de las imagenes en el batch", tams)
     images = torch.stack(images, dim = 0) # tendra dimensiones numvistastotalbatch, 3,250,250
-    
+
     labels = [d[1] for d in data]
     if labels[0] is not None:
         labels = torch.stack(labels,dim=0)
@@ -155,6 +157,7 @@ def my_collate_fn(data): # Crear batch a partir de lista de casos
     fruit_ids = [d[3] for d in data]  
     imags_folder = [d[4] for d in data]  
     bin_masks = [d[5] for d in data]
+
     return { 
         'images': images, 
         'labels': labels,
@@ -177,7 +180,9 @@ class DataModule(pl.LightningDataModule):
         self.predset=None
         train_dataplaces=config['data']['train']
         val_dataplaces=config['data']['val']
+        
         if train_dataplaces is not None:
+            print("\nGenerating training dataset...")
             self.trainset,self.tipos_defecto=m_dataLoad_json.genera_ds_jsons_multilabel(self.config['data']['root_folder'], 
                                                                                                     dataplaces=train_dataplaces, 
                                                                                                     sufijos=config['data']['suffixes'],
@@ -191,6 +196,7 @@ class DataModule(pl.LightningDataModule):
                                                                                                     use_masks=config['data']['use_segmentation_masks'])
 
         if val_dataplaces is not None:
+            print("\nGenerating validation dataset...")
             self.valset,self.tipos_defecto=m_dataLoad_json.genera_ds_jsons_multilabel(self.config['data']['root_folder'], 
                                                                                                     dataplaces=val_dataplaces, 
                                                                                                     sufijos=config['data']['suffixes'],
@@ -209,8 +215,10 @@ class DataModule(pl.LightningDataModule):
         print(f"Valset: {len(self.valset)}")    
         assert len(self.trainset)>0, "Trainset is empty"
         assert len(self.valset)>0, "Valset is empty"
-        
+
         print('Computing means and stds...')
+
+        self.categories=self.tipos_defecto
         
         self.means_norm, self.stds_norm=m_dataLoad_json.calcula_media_y_stds(self.trainset)
         print(f'Means: {self.means_norm}')
@@ -230,6 +238,13 @@ class DataModule(pl.LightningDataModule):
             transforms.RandomRotation(augmentation['random_rotation']),
             transforms.Resize(training_size),
             ])
+        
+        transform_geometry_val= transforms.Compose([
+            transforms.Resize(training_size),
+            ])
+        
+        print(transform_geometry_val)
+        print(transform_geometry_train)
 
         transform_intensity_train= transforms.Compose([
             transforms.ColorJitter(brightness=augmentation['brightness'], hue=augmentation['hue'],contrast=augmentation['contrast'],saturation=augmentation['saturation']),            
@@ -240,17 +255,18 @@ class DataModule(pl.LightningDataModule):
         transform_train=Aumentador_Imagenes_y_Mascaras(transform_geometry_train,
                                                        transform_intensity_train,transform_normalize)
 
-        transform_val = Aumentador_Imagenes_y_Mascaras(transforms.Resize(training_size),
+        transform_val = Aumentador_Imagenes_y_Mascaras(transform_geometry_val,
                                                        None,transform_normalize)
         
         
         self.train_dataset=None
         self.val_dataset=None
         self.pred_dataset=None
+        use_masks=config['data']['use_segmentation_masks']
         if self.trainset is not None:
-            self.train_dataset = ViewsDataSet(dataset=self.trainset, transform = transform_train,use_masks=self.use_masks)    
+            self.train_dataset = ViewsDataSet(dataset=self.trainset, transform = transform_train,use_masks=use_masks)    
         if self.valset is not None:                   
-            self.val_dataset = ViewsDataSet(dataset=self.valset, transform = transform_val, use_masks=self.use_masks) 
+            self.val_dataset = ViewsDataSet(dataset=self.valset, transform = transform_val, use_masks=use_masks) 
             
                           
         if self.trainset is not None: # Si estamos en prediccion no lo hago
@@ -259,7 +275,7 @@ class DataModule(pl.LightningDataModule):
             self.view_ids_train=view_ids(self.trainset)
             self.view_ids_val=view_ids(self.valset)
 
-
+        print(">>>>>>>>>>>>>>>>>>")
         if self.train_dataset is not None:
             print(f"len total trainset =   {len(self.train_dataset )}")
 
@@ -270,14 +286,8 @@ class DataModule(pl.LightningDataModule):
     def get_len_trainset(self):
         return len(self.train_dataset)
     
-    def get_num_classes(self):
-        return len(self.set_defect_types)  
 
-    def get_viewids_train(self):
-        return self.view_ids_train
 
-    def get_viewids_val(self):
-        return self.view_ids_val
 
 
     def prepare_data(self):
@@ -291,22 +301,31 @@ class DataModule(pl.LightningDataModule):
         print("batch_size in Dataloader train", self.batch_size)
         use_masks=self.config['data']['use_segmentation_masks']
         self.num_workers=self.config['train']['num_workers']
+        print("Numworkers leido de config", self.num_workers)
+        if self.num_workers < 0:
+            self.num_workers=multiprocessing.cpu_count()-2
+            if self.num_workers < 0:
+                self.num_workers=1
         print("num_workers in train_dataloader", self.num_workers)
-        if self.use_balanced_sampler:
-            if self.multilabel == False:
-                misampler=sampler.Balanced_BatchSampler(self.trainset)
-            else:
-                misampler=sampler.Balanced_BatchSamplerMultiLabel(self.trainset, 
+        
+        # if self.multilabel == False:
+        #     misampler=sampler.Balanced_BatchSampler(self.trainset)
+        # else:
+        misampler=sampler.Balanced_BatchSamplerMultiLabel(self.trainset, 
                                                                   self.tipos_defecto,use_masks=use_masks)
 
-            return DataLoader(self.train_dataset, batch_size=self.batch_size,sampler=misampler, num_workers=self.num_workers, collate_fn=my_collate_fn)
-        else:
-            return DataLoader(self.train_dataset, batch_size=self.batch_size,shuffle=True, num_workers=self.num_workers, collate_fn=my_collate_fn)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size,sampler=misampler, num_workers=self.num_workers, collate_fn=my_collate_fn)
     
     def val_dataloader(self):
         self.batch_size=self.config['train']['batch_size']
         print("batch_size in Dataloader train", self.batch_size)        
         self.num_workers=self.config['train']['num_workers']
+        print("Numworkers leido de config", self.num_workers)
+        if self.num_workers < 0:
+            self.num_workers=multiprocessing.cpu_count()-2
+            if self.num_workers < 0:
+                self.num_workers=1
+        print("num_workers in train_dataloader", self.num_workers)
         print("num_workers in train_dataloader", self.num_workers)        
         print("batch_size in Dataloader val", self.batch_size)
         return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=False,shuffle=False, collate_fn=my_collate_fn)

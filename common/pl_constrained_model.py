@@ -1,7 +1,7 @@
 
 import warnings
 warnings.filterwarnings('ignore')
-
+from pathlib import Path
 # torch and lightning imports
 import torch
 import torch.nn as nn
@@ -48,11 +48,21 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         
         self.config=config
         self.area_minima=config['train']['min_defect_area']
+        self.constrain_weight=config['train']['constrain_weight']  
+        self.defect_types=config['model']['defect_types']
+        self.num_classes=len (self.defect_types)
+        self.num_channels_in=config['model']['num_channels_input'] 
+        self.p_dropout=config['train']['p_dropout']
+        self.lista_pesos_clase=config['train']['class_weights']
+        self.bottom_constrain_weight=config['train']['bottom_constrain_weight']
+        self.bin_mask_weight=config['train']['binmask_weight']
+        self.min_negative_fraction=config['train']['min_negative_fraction']
+
         print("SegmentMIL Area Minima Defecto:", self.area_minima)
         print('ConstrainWeight:',self.constrain_weight)
         
         print('SegmentMIL num clases out=',self.num_classes)
-        print('Num epochs:',self.num_epochs)
+
            
         model_version=str(config['model']['model_version'])
         if model_version ==  "50":
@@ -68,12 +78,18 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         self.pos_weights = None
         self.area_minima = config['train']['min_defect_area']
         self.min_negative_fraction = config['train']['min_negative_fraction']
+        self.class_names=config['model']['defect_types']
         
     def load(self,config):
         self.config=config
         self.__init__(config)
 
     def save(self,path):
+
+        directory=self.config['train']['output']['path']
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        filename=self.config['train']['output']['model_file']
+        path=os.path.join(directory,filename)
         salida={'state_dict':self.state_dict(),
         #'normalization_dict':self.normalization_dict, in config
         'training_date': datetime.datetime.now(),
@@ -233,9 +249,9 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         
         optimizer=self.config['train']['optimizer']
         gamma_param=self.config['train']['gamma_param']
-        warmup_iter=self.config['train']['warmup_iter']
-        num_epochs=self.config['train']['num_epochs']
-        weight_decay=self.config['train']['weight_decay']
+        warmup_iter=self.config['train']['warmup']
+        num_epochs=self.config['train']['epochs']
+        weight_decay=self.config['train']['weights_decay']
         lr=self.config['train']['learning_rate']
         parameters = list(filter(lambda x: x.requires_grad, self.parameters()))
         if optimizer.lower() == 'sgd':
@@ -243,10 +259,10 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         elif optimizer.lower() == 'adam':
             optimizer = Adam(parameters, lr=lr, weight_decay=weight_decay)
         else:
-            print(f'**** WARNING : Optimizer configured to {optimizer}. Falling back to SGD')
+            print(f'**** WARNING : Optimizer configured to {optimizer}. Falling back to SGD')   
             optimizer = SGD(parameters, lr=lr, weight_decay=self.weight_decay)
                 
-        gamma=gamma_param(1/num_epochs)
+        gamma=gamma_param**(1/num_epochs)
         if warmup_iter > 0:           
             warmup_lr_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_iter)
             schedulers = [warmup_lr_scheduler, ExponentialLR(optimizer, gamma=gamma) ]

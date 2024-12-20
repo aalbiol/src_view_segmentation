@@ -11,6 +11,7 @@ import torch
 import math
 from PIL import Image
 import sys
+from tqdm import tqdm   
 
 
 def parse_json(filename):
@@ -256,8 +257,8 @@ def  genera_ds_jsons_multilabel(root,  dataplaces, sufijos=None,maxValues=None, 
         else:
             print('Error in dataplace:',place)
             sys.exit(1)
-    print('JSON files:', json_files)
-    print('Images directories:', imags_directorio)
+    
+    
 
     if defect_types is None:
         tipos_defecto=set()
@@ -284,7 +285,11 @@ def  genera_ds_jsons_multilabel(root,  dataplaces, sufijos=None,maxValues=None, 
     print("maxValues: ", maxValues)
     #print(json_files)
     
-    for fruto in zip(json_files,imags_directorio):
+    if in_memory:
+        print(f"Loading {len(json_files)} json files and Images in memory...")
+    else:
+        print(f"Loading {len(json_files)} json files (not images)...")
+    for fruto in tqdm(zip(json_files,imags_directorio)):
         json_file=fruto[0]
         f_id=fruit_id(json_file,splitname_delimiter)        
         d=parse_json(json_file)        
@@ -309,7 +314,7 @@ def  genera_ds_jsons_multilabel(root,  dataplaces, sufijos=None,maxValues=None, 
                     'imag_folder': imags_folder, 'sufijos': sufijos, 'maxValues':maxValues, 'crop_size':crop_size, 
                     'bin_masks':bin_masks, 'dict_json':d, 'tipos_defecto': tipos_defecto
                     } 
-        print(dict_vista)
+        
         if bin_masks is None:
             #print('Posiblemente not in memory')
             pass
