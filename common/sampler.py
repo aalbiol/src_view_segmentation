@@ -51,6 +51,8 @@ def get_class_items_with_mask(dataset,clase,use_masks):
                 if false -> devuelve lista de nbatch ceros.
     Devuelve lista de indices de los casos donde hay máscara.
     '''
+    
+    print("Sampler use_masks",use_masks)
     casos_mascara=pl_datamodule.casos_mask(dataset,clase,use_masks) #Lista de nbatch elementos: 0 si no hay mascara binaria para el elemento de la clase, 1 si la hay
     
     if casos_mascara.sum() is 0: #No hay ninguna mascara para esta clase o use_masks=False
@@ -143,6 +145,7 @@ class Balanced_BatchSamplerMultiLabel(Sampler):
         print('Estadisticas_clases',estadistica_clase)
         print('Sampler Numclases=',num_clases)
         print('Sampler num instancias',len(dataset))
+        print("Sampler use_masks",use_masks)
         self.listas=[]
         self.lengths=[] 
         lista= get_class_items(dataset,-1)
@@ -163,7 +166,7 @@ class Balanced_BatchSamplerMultiLabel(Sampler):
         print('Sampler  Numlistas=',len(self.listas)) 
         self.dataset = dataset
         #self.len =  2*len(dataset)
-        factor=max(self.lengths)/(len(dataset)/len(self.lengths)) # Factor que multiplica a la longitud del dataset para asegurar que se seleccionan todas las imagenes de la lista mas larga
+        factor=1 # Factor que multiplica a la longitud del dataset para asegurar que se seleccionan todas las imagenes de la lista mas larga
         print('factor len(dataset)',factor)
         self.len=int(factor*len(dataset))
         print('Sampler len=',self.len) 

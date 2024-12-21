@@ -23,14 +23,17 @@ def parse_json(filename):
 def extract_tipos_defecto(d):
     anot =d['annotations']
     tipos_defecto=list(anot.keys())
+    print(anot)
     return tipos_defecto
 
 def extract_one_hot(d,tipos_defecto):
     anot =d['annotations']
+
+    anot_minuscula={k.lower():v for k,v in anot.items()}
     v=[]
     for defecto in tipos_defecto:
-        if defecto in anot:
-            tmp=anot[defecto]
+        if defecto in anot_minuscula:
+            tmp=anot_minuscula[defecto]
             if isinstance(tmp,str):
                 tmp=float(tmp)
             if tmp <0 :
@@ -39,6 +42,7 @@ def extract_one_hot(d,tipos_defecto):
             v.append(tmp)
         else:
             v.append(math.nan)
+
     return torch.tensor(v)
 
 def extract_masks(d, tipos_defecto):
@@ -47,6 +51,7 @@ def extract_masks(d, tipos_defecto):
     '''
     if 'masks' not in d:
         return None
+    
     return d['masks']
  
 
@@ -131,6 +136,8 @@ def mask_bin_segmentacion(masks_RGB_values,im_anotada,defectos,max_value,v_id,to
         bin_masks=[None]*len(defectos)
         return bin_masks
     bin_masks=[]
+    
+    masks_RGB_values={k.lower():v for k,v in masks_RGB_values.items()}
     for d in range(len(defectos)):
         if defectos[d] not in masks_RGB_values:
             bin_masks.append(None)
@@ -156,6 +163,7 @@ def lee_mascaras(imags_folder,v_id,terminacion_im_mascara,max_value,crop_size,js
     if use_masks:
         im_mask=lee_im_mask_segmentacion(imags_folder,v_id,terminacion=terminacion_im_mascara,max_value=max_value,crop_size=crop_size)
         if im_mask is not None:
+            #print("Mask found for ", v_id)
             d=json_dict
             masks = extract_masks(d, tipos_defecto)
             bin_masks=mask_bin_segmentacion(masks,im_mask,tipos_defecto,max_value,v_id)
@@ -224,7 +232,7 @@ def  genera_ds_jsons_multilabel(root,  dataplaces, sufijos=None,maxValues=None, 
                                multilabel=True, in_memory=True, use_masks=False):
     assert sufijos is not None
 
-    assert sufijos is not None
+    print("USe masks: ", use_masks) 
     json_files=[]
     imags_directorio=[]
     for place in dataplaces:
@@ -285,6 +293,8 @@ def  genera_ds_jsons_multilabel(root,  dataplaces, sufijos=None,maxValues=None, 
     print("maxValues: ", maxValues)
     #print(json_files)
     
+    tipos_defecto=[t.lower() for t in tipos_defecto]  
+
     if in_memory:
         print(f"Loading {len(json_files)} json files and Images in memory...")
     else:
@@ -292,7 +302,8 @@ def  genera_ds_jsons_multilabel(root,  dataplaces, sufijos=None,maxValues=None, 
     for fruto in tqdm(zip(json_files,imags_directorio)):
         json_file=fruto[0]
         f_id=fruit_id(json_file,splitname_delimiter)        
-        d=parse_json(json_file)        
+        d=parse_json(json_file)    
+
         v_id=view_id(json_file)
         imags_folder= fruto[1]
         
@@ -305,6 +316,8 @@ def  genera_ds_jsons_multilabel(root,  dataplaces, sufijos=None,maxValues=None, 
             bin_masks=None
 
         onehot=extract_one_hot(d,tipos_defecto)
+        #print('Reading ', json_file, onehot)
+
         if multilabel==False and onehot.sum()> 1: #skip instances with multiple labels if multiclass
             continue
         if multilabel==False:
@@ -324,7 +337,7 @@ def  genera_ds_jsons_multilabel(root,  dataplaces, sufijos=None,maxValues=None, 
                     pass
                     #print('Mascara no disponible para el defecto')
                 else:
-                    print('BIN MASK for fruit_id',v_id)
+                    pass #print('BIN MASK for fruit_id',v_id)
             
 
         out.append(dict_vista)

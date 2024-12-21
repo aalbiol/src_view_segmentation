@@ -79,21 +79,22 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         self.area_minima = config['train']['min_defect_area']
         self.min_negative_fraction = config['train']['min_negative_fraction']
         self.class_names=config['model']['defect_types']
+        self.binmask_weight=config['train']['binmask_weight']
         
     def load(self,config):
         self.config=config
         self.__init__(config)
 
-    def save(self,path):
-
-        directory=self.config['train']['output']['path']
-        Path(directory).mkdir(parents=True, exist_ok=True)
-        filename=self.config['train']['output']['model_file']
-        path=os.path.join(directory,filename)
+    def save(self,path=None):
+        if path is None:
+            directory=self.config['train']['output']['path']
+            Path(directory).mkdir(parents=True, exist_ok=True)
+            filename=self.config['train']['output']['model_file']
+            path=os.path.join(directory,filename)
         salida={'state_dict':self.state_dict(),
         #'normalization_dict':self.normalization_dict, in config
         'training_date': datetime.datetime.now(),
-        'final_val_aucs':self.aucs,
+#        'final_val_aucs':self.aucs,
         'model_type':'SegmentationMIL',
         'config': self.config
     }
@@ -370,3 +371,54 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         pass
             
 
+
+    def predice_fruto(self,vistas):
+            '''
+            Recibe una lista de PILS.
+            Devuelve lista de mapas de probabilidad de cada clase
+            Cada mapa es un tensor con tantos canales como clases
+            '''
+            
+            
+            self.image_size=self.config['data']['training_size']
+            transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.ToTensor(),
+            transforms.Resize(self.image_size),
+            ])
+
+            norm_dict=self.config['data']['dict_norm']
+            #print('Predice Fruto Norm dict',norm_dict)
+            
+            if vistas[0].shape[0] > 3:
+                vistasRGB=[v[0:3,:,:] for v in vistas]
+                vistas_extra=[v[3:,:,:] for v in vistas]
+                vistas_transformadas_RGB = [ transform(v) for v in vistasRGB ]
+                normalizador_RGB = transforms.Normalize(norm_dict['means_norm'][0:3], norm_dict['stds_norm'][0:3])
+                normalizador_extra = transforms.Normalize(norm_dict['means_norm'][3:], norm_dict['stds_norm'][3:])
+                vistas_normalizadas_RGB = [ normalizador_RGB(v) for v in vistas_transformadas_RGB ]
+                vistas_transformadas_extra = [ transform(v) for v in vistas_extra]
+                vistas_normalizadas_extra = [ normalizador_extra(v) for v in vistas_transformadas_extra ]
+                vistas_transformadas=[]
+                vistas_normalizadas=[]
+                for rgb, nir_uv in zip(vistas_transformadas_RGB,vistas_transformadas_extra):
+                    vistas_transformadas.append(torch.cat((rgb,nir_uv),dim=0))
+                for rgb, nir_uv in zip(vistas_normalizadas_RGB,vistas_normalizadas_extra):
+                    vistas_normalizadas.append(torch.cat((rgb,nir_uv),dim=0))
+
+            else:
+                # Normalizar las imágenes y crear batch
+                normalizador = transforms.Normalize(self.normalization['medias_norm'], self.normalization['stds_norm'])
+                vistas_transformadas = [ transform(v) for v in vistas ]
+                vistas_normalizadas = [ normalizador(v) for v in vistas_transformadas ]
+                
+
+            batch = torch.stack(vistas_transformadas)
+            batchn = torch.stack(vistas_normalizadas)
+            batchn=batchn.to('cuda')
+
+            #features = self.modelo.features(batchn)        
+            logits =self.modelo(batchn)
+            probs=F.sigmoid(logits)
+            
+            return probs,batch

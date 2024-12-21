@@ -29,7 +29,7 @@ import json
 from pl_datamodule import DataModule
 from pl_constrained_model import ConstrainedSegmentMIL
 
-#from imgcallback import ImageLogger
+from imgcallback import ImageLogger
 
 import pathlib
 
@@ -78,9 +78,15 @@ if __name__ == "__main__":
     project=config['train']['wandb_project']
     logname=config['train']['logname']
     miwandb= WandbLogger(name=logname, project=project,config=config)
+    
+    log_cimg=config['train']['log_cimg']
+    tipos_defecto=datamodule.categories
+    imagelogger=ImageLogger(epoch_interval=1,num_samples=1,fname=log_cimg,  model=model)
+    
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
     callbacks4=[lr_monitor, 
-                FeatureExtractorFreezeUnfreeze(unfreeze_at_epoch=config['train']['unfreeze_epoch'],initial_denom_lr=1)]
+                FeatureExtractorFreezeUnfreeze(unfreeze_at_epoch=config['train']['unfreeze_epoch'],initial_denom_lr=1),
+                imagelogger]
     num_epochs=config['train']['epochs']
     trainer_args = {'max_epochs': num_epochs, 'logger' : miwandb}
 

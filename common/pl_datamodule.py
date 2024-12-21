@@ -116,11 +116,15 @@ def casos_mask(dataset,clase,use_masks):
         if use_masks:
             if 'masks' in caso['dict_json']:
                 masks=caso['dict_json']['masks']
+                
+                masks={k.lower():v for k,v in masks.items()}
+                #print("masks",masks)
                 if clase in masks:
-                    valor=masks[clase]
+                    
+                    valor=masks[clase.lower()]
                     if len(valor)>0:
                         res=1
-                        print ("Añadiendo a la lista de imagenes con mascara ", view_id)
+                        #print ("Añadiendo a la lista de imagenes con mascara ", view_id)
         lista.append(res)
     return torch.tensor(lista)
 
@@ -243,8 +247,6 @@ class DataModule(pl.LightningDataModule):
             transforms.Resize(training_size),
             ])
         
-        print(transform_geometry_val)
-        print(transform_geometry_train)
 
         transform_intensity_train= transforms.Compose([
             transforms.ColorJitter(brightness=augmentation['brightness'], hue=augmentation['hue'],contrast=augmentation['contrast'],saturation=augmentation['saturation']),            
