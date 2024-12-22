@@ -44,6 +44,7 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         super().__init__()
 
         if config is None: # dummy constructor # config may be loaded later with load
+            self.modelo = None
             return
         
         self.config=config
@@ -80,6 +81,13 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         self.min_negative_fraction = config['train']['min_negative_fraction']
         self.class_names=config['model']['defect_types']
         self.binmask_weight=config['train']['binmask_weight']
+        self.label_smoothing=config['train']['label_smoothing']
+        self.valpredicts=[]
+        self.valtruths=[]
+        self.valious=[]
+        self.valious=[] # Create as many empty lists as classes
+        for i in range(self.num_classes):
+            self.valious.append([])
         
     def load(self,config):
         self.config=config
@@ -92,10 +100,13 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
             filename=self.config['train']['output']['model_file']
             path=os.path.join(directory,filename)
         salida={'state_dict':self.state_dict(),
-        #'normalization_dict':self.normalization_dict, in config
+        'normalization_dict':self.normalization_dict, 
         'training_date': datetime.datetime.now(),
-#        'final_val_aucs':self.aucs,
+        'final_val_aucs':self.aucs,
         'model_type':'SegmentationMIL',
+        'final_val_aucs':self.aucs,
+        'image_size':self.image_size,
+        'class_names':self.defect_types,
         'config': self.config
     }
 
@@ -186,13 +197,23 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
 
         losses=[]
         bottom_losses=[]
-      
+        smoothed_labels=(1-self.label_smoothing)*labels + self.label_smoothing/2 # Para multilabel cada label es binaria
+        smoothed_bin_masks=[]
+        for b in range(batch_size):
+            batch_element_class_smoothed_masks=[]
+            for jj in range(ntipos_defecto):
+                if bin_masks[b][jj] is not None:
+                    batch_element_class_smoothed_masks.append((1-self.label_smoothing)*bin_masks[b][jj]+ self.label_smoothing /2)
+                else:
+                    batch_element_class_smoothed_masks.append(None)
+            smoothed_bin_masks.append(batch_element_class_smoothed_masks)
+        
         for k in range(ntipos_defecto): # para cada clase
             listapesos=[]
             class_mean_losses=[]
             for b in range(batch_size): # para cada elemento b del batch 
-                bm_b=bin_masks[b] # Máscaras binaria del elemento b del batch
-                labels_b=labels[b] # Etiquetas del elemento b del batch
+                bm_b=smoothed_bin_masks[b] # Máscaras binaria del elemento b del batch
+                labels_b=smoothed_labels[b] # Etiquetas del elemento b del batch
                
                 logits_pixeles_b=logits_pixeles[b]
                 top_logits_b=top_logits[b]
@@ -273,6 +294,7 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
 
 
     def training_step(self, batch, batch_idx):
+        assert self.modelo is not None, 'Model not initialized'
         #print("New training step")
         images = batch['images']
         labels = batch['labels']
@@ -324,6 +346,7 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
 
 
     def validation_step(self, batch, batch_idx):
+        assert self.modelo is not None, 'Model not initialized'
         images = batch['images']
         labels = batch['labels']
         folders=batch['imags_folder']
@@ -347,6 +370,31 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
             print('Folders',folders)
             print('Casos',casos)
             exit()
+        # Computing metrics 
+        top_logits=aggregation[0] # Top K logits para cada clase (batch_size x num_classes x K)
+        logits_vista=torch.mean(top_logits,dim=2) # Media de los top K logits para cada clase (batch_size x num_classes)
+        truths_vista=labels
+        self.valpredicts.append(logits_vista)
+        self.valtruths.append(truths_vista)
+        
+        ## IOUS
+        threshold=0.5
+        for b in range(logits_pixels.shape[0]):
+            for c in range(self.num_classes):
+                if bin_masks[b][c] is not None:
+                    iou=metricas.iou(bin_masks[b][c],torch.sigmoid(logits_pixels[b,c]),threshold=threshold)
+                    self.valious[c].append(iou)
+                elif labels[b,c] == 0:
+                    if logits_vista[b,c] > threshold:
+                        self.valious[c].append(0.0)
+                    else:
+                        self.valious[c].append(1.0)
+                else:
+                    if logits_vista[b,c] < threshold:
+                        self.valious[c].append(0.0)
+                    
+        
+
    
         log_dict={'val_loss':global_loss,'val_BCEloss':loss_cross_entropy,
                   'val_constrain_loss':loss_constrain_max_area}
@@ -363,6 +411,42 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
 
     def on_validation_epoch_end(self, ) -> None:        
         self.epoch_counter += 1 
+        
+        predicts=torch.cat(self.valpredicts,dim=0)
+        truths=torch.cat(self.valtruths,dim=0)
+        
+        aucfunc=torchmetrics.AUROC(task='multilabel',num_labels=self.num_classes,average='none') 
+        aucs=aucfunc(predicts,(truths>0.5).int())          
+        
+        self.aucs={}
+        
+        for i in range(self.num_classes):
+            self.aucs['ValAUC-'+self.class_names[i]]=aucs[i].item()
+        
+        self.log_dict(self.aucs , on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        
+        #print("Val IOUs:",self.valious)
+        meanious=[]
+        for lista in self.valious:
+            if len(lista) > 0:
+                #lista=[k.cpu().item() for k in lista]
+                array=np.array(lista)
+                meanious.append(np.mean(array))
+            else:
+                meanious.append(-1)
+        self.dict_valious={}
+        for i in range(self.num_classes):
+            self.dict_valious['ValIOU-'+self.class_names[i]]=meanious[i]
+        self.log_dict(self.dict_valious , on_step=False, on_epoch=True, prog_bar=True, logger=True)    
+                
+        ## Clear for next epoch    
+        self.valpredicts=[]
+        self.valtruths=[]
+        
+        
+        self.valious=[] # Create as many empty lists as classes
+        for i in range(self.num_classes):
+            self.valious.append([])
         return    
 
 

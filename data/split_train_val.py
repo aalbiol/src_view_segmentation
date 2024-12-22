@@ -72,6 +72,12 @@ def create_train_val_lists(directorio,prob_train=0.8,delimiter='_', train_list_n
 
 
 if __name__ == '__main__':
+    
+    
+    if len(sys.argv)<2:
+        print('Usage: split_train_val.py config_file')
+        sys.exit(1)
+        
     config_file=sys.argv[1]
     
     directorios=[]

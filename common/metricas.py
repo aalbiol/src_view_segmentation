@@ -206,3 +206,14 @@ def mintopk(probs,k):
     print('top_logits_ordered.shape',top_logits_ordered.shape)
     print('min_logit',min_logit[0].shape)
     return min_logit[0]
+
+def iou(labels,probs,threshold=0.5):
+    
+    predbin=probs>threshold
+    targetbin=labels>threshold
+    intersection=(predbin*targetbin).sum()
+    union=(predbin+targetbin).sum()
+    if union==0:
+        return 1.0
+    else:
+        return float((intersection/union).item())
