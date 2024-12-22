@@ -23,6 +23,20 @@ import m_dataLoad_json
 
 from transformaciones import Aumentador_Imagenes_y_Mascaras
 
+def remove_sufix(filename,delimiter):
+    '''
+    Dado un nombre de fichero, 
+    obtiene el basename
+    elimina el _xx.png
+
+    '''
+    
+    id=filename.split(delimiter)
+
+    id=id[:-1]
+    id=delimiter.join(id)
+
+    return id
 
 class FileNamesDataSet(Dataset):
     '''

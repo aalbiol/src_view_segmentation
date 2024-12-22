@@ -26,7 +26,11 @@ import modelos
 import metricas
 import os
 import datetime
+import m_dataLoad_json
+import pl_datamodule
 import pickle
+from tqdm import tqdm
+import yaml
 
 torch.set_printoptions(precision=3)
 
@@ -58,6 +62,9 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         self.bottom_constrain_weight=config['train']['bottom_constrain_weight']
         self.bin_mask_weight=config['train']['binmask_weight']
         self.min_negative_fraction=config['train']['min_negative_fraction']
+        self.crop_size=config['data']['crop_size']
+        self.training_size=config['data']['training_size']
+        
 
         print("SegmentMIL Area Minima Defecto:", self.area_minima)
         print('ConstrainWeight:',self.constrain_weight)
@@ -89,9 +96,14 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         for i in range(self.num_classes):
             self.valious.append([])
         
-    def load(self,config):
-        self.config=config
-        self.__init__(config)
+    def load(self,model_file):
+        with open(model_file, 'rb') as f:
+            leido = pickle.load(f)
+        
+        self.__init__(leido['config'])
+        self.load_state_dict(leido['state_dict'])
+        self.normalization_dict=leido['config']['data']['dict_norm']
+        self.training_date=leido['training_date']
 
     def save(self,path=None):
         if path is None:
@@ -100,7 +112,6 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
             filename=self.config['train']['output']['model_file']
             path=os.path.join(directory,filename)
         salida={'state_dict':self.state_dict(),
-        'normalization_dict':self.normalization_dict, 
         'training_date': datetime.datetime.now(),
         'final_val_aucs':self.aucs,
         'model_type':'SegmentationMIL',
@@ -506,3 +517,98 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
             probs=F.sigmoid(logits)
             
             return probs,batch
+
+
+
+    def predict(self, nombres,device,include_images=False,remove_suffix=True):
+        '''
+        lista de nombres de imágenes
+
+        Se le pueden pasar nombres _RGB.png, _NIR.png, _UV.png,...
+
+        Para generar la lista de casos,
+        se les quita el sufijo , por ejemplo _RGB.png usando el delimiter "_" para generar el viewid y luego se lee con 
+        
+        
+        '''
+        
+        self.maxvalues=self.config['data']['maxvalues']
+        self.terminaciones=self.config['data']['suffixes']
+        self.delimiter=self.config['data']['delimiter']
+        #print("************** crop_size=",self.crop_size)
+        
+        max_value=self.maxvalues
+        terminaciones=self.terminaciones
+        delimiter=self.delimiter
+
+        if not isinstance(nombres ,list):
+            nombres=[nombres]
+        self.eval()
+        #print(device)
+        self.to(device)
+        resultados=[]
+        
+
+        if remove_suffix:
+            sin_prefijos=[ pl_datamodule.remove_sufix(nombre,delimiter) for nombre in nombres]
+        else:
+            sin_prefijos=nombres
+
+        sin_prefijos=list(set(sin_prefijos))
+        self.crop_size=None
+        if self.crop_size is None:
+            transformacion=transforms.Compose([
+            transforms.Resize(self.training_size),
+            transforms.Normalize(self.normalization_dict['means_norm'],self.normalization_dict['stds_norm'])
+        ])
+        else:
+            transformacion=transforms.Compose([
+                transforms.CenterCrop(self.crop_size),
+                transforms.Resize(self.training_size),
+                transforms.Normalize(self.normalization_dict['means_norm'],self.normalization_dict['stds_norm'])
+            ])
+            
+
+        for nombre in (sin_prefijos):
+            #print("Processing ",nombre)
+            x=m_dataLoad_json.lee_vista(images_folder='.',view_id=nombre,terminaciones=terminaciones,maxValues=max_value,crop_size=self.crop_size)            
+            #print("xminmax=",x.min, x.max,x.shape)
+            im=x.to(device)
+
+#                redimensionada=transforms.Resize(self.training_size)(im)
+#                medias=self.normalization_dict['medias_norm']
+#                stds=self.normalization_dict['stds_norm']
+#                normalizada=transforms.Normalize(medias,stds)(redimensionada)  
+            #print(transformacion)
+            normalizada=transformacion(im)
+            #print("normalizada=",normalizada.min(),normalizada.max(),normalizada.shape)
+            
+            with torch.no_grad():
+                logits_pixels,aggregation=self.forward_train(normalizada.unsqueeze(0))
+
+            probs_pixels=F.sigmoid(logits_pixels)
+            
+            #print("probs_pixels=",probs_pixels.min(),probs_pixels.max(),probs_pixels.shape)
+            
+            w=im.shape[2]
+            h=im.shape[1]
+            probs_pixeles_tam_original=transforms.Resize([h,w])(probs_pixels)
+            top_logits=aggregation[0] 
+            #print("top_logits=",top_logits.min(),top_logits.max(),top_logits.shape)
+            logits_vista=torch.mean(top_logits,dim=2)
+            probs_vista=F.sigmoid(logits_vista)
+                
+            im=im.cpu().numpy().transpose(1,2,0)
+            
+            probsvista_dict={}
+            for i in range(self.num_classes):
+                probsvista_dict[self.class_names[i]]=probs_vista[0,i].item()
+            resultado={'imgname':nombre,'view_probs':probsvista_dict,'view_probs_tensor':probs_vista[0].cpu(),
+                       'pixel_probs_tensor':probs_pixeles_tam_original.cpu()}
+            if include_images:
+                resultado['img']=im
+
+            resultados.append(resultado)
+
+        return resultados
+

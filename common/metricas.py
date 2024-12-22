@@ -4,6 +4,24 @@ import torch.nn.functional as F
 from torchmetrics.classification import AUROC
 from torch.nn import BCEWithLogitsLoss
 
+import torchmetrics 
+
+def calculate_auc_multilabel(preds,targets,clases):
+    f_auroc=torchmetrics.AUROC(task='multilabel',num_labels=len(clases),average='none')
+
+    res=f_auroc(preds,targets.int())
+    res=res.tolist()
+
+    aucs={}
+    #print('res',res)
+    for c,auc in zip(clases,res):
+        #print(type(c), c)
+        #print('c',c)
+        aucs[c]=auc
+        #print(f'AUC({c}) : {auc:.3f}')
+    
+    return aucs
+
 def m_accuracy_max(logits,labels):
     target=torch.argmax(labels,dim=1).long() 
 
