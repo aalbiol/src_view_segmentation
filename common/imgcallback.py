@@ -22,6 +22,7 @@ from pl_constrained_model import ConstrainedSegmentMIL
 from torchvision import transforms
 import pycimg
 from PIL import Image
+import os
 
 
 
@@ -32,11 +33,13 @@ def fig2pil(fig):
 
     # Render the figure to a pixel buffer
     canvas.draw()
-
-    # Get the pixel buffer and convert it to a PIL image
-    width, height = fig.get_size_inches() * fig.get_dpi()
-    image = Image.frombytes('RGB', canvas.get_width_height(), canvas.tostring_rgb())
-    return image
+    canvas.print_png('log_figure.png')
+    image=Image.open('log_figure.png')
+    a = np.asarray(image)
+    image2=Image.fromarray(a)
+    image.close()
+    os.remove('log_figure.png')
+    return image2
 
 
 
