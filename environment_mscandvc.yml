@@ -30,5 +30,5 @@ dependencies:
     - dvc_webdav
     - boto3 
     - awscli
-    - dvc_s3
-    - dvc_ssh
+    - dvc-s3
+    - dvc-ssh

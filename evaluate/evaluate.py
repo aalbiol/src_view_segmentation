@@ -205,13 +205,13 @@ if __name__ == "__main__":
             if missing_mask:
                 if targets_train[b][c] == 0:
                     if preds_train[b][c] > threshold:
-                        ious_train[c].append(0.0)
+                        ious_neutros[c].append(0.0)
                     else:
                         # ious_train[c].append(1.0)
                         ious_neutros[c].append(1.0)
                 else:
                     if preds_train[b][c] < threshold:
-                        ious_train[c].append(0.0)   
+                        ious_neutros[c].append(0.0)   
     ious_train_dict={}
     for c in range(len(tipos_defecto)):
         ious_neutros[c]+=ious_train[c]
@@ -310,14 +310,14 @@ if __name__ == "__main__":
             if missing_mask:
                 if targets_val[b][c] == 0:
                     if preds_val[b][c] > threshold:
-                        ious_val[c].append(0.0)
+                        ious_neutros[c].append(0.0)
                     
                     else:
                         # ious_val[c].append(1.0)
                         ious_neutros[c].append(1.0)
                 else:
                     if preds_val[b][c] < threshold:
-                        ious_val[c].append(0.0)
+                        ious_neutros[c].append(0.0)
                        
 
     ious_val_dict={}
