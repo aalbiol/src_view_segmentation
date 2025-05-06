@@ -1,59 +1,10 @@
-#
-#  File            : pycimg.py
-#                    ( Python file )
-#
-#  Description     : Show how to import .cimg and .cimgz files into python (numpy).
-#                    This file is a part of the CImg Library project.
-#                    ( http://cimg.eu )
-#
-#  Copyright       : Antonio Albiol, Universidad Politecnica Valencia (SPAIN)
-#
-#                    In case of issues or comments contact Antonio Albiol at:
-#                    aalbiol (at) dcom.upv.es
-#
-#  Licenses        : This file is 'dual-licensed', you have to choose one
-#                    of the two licenses below to apply.
-#
-#                    CeCILL-C
-#                    The CeCILL-C license is close to the GNU LGPL.
-#                    ( http://www.cecill.info/licences/Licence_CeCILL-C_V1-en.html )
-#
-#                or  CeCILL v2.1
-#                    The CeCILL license is compatible with the GNU GPL.
-#                    ( http://www.cecill.info/licences/Licence_CeCILL_V2.1-en.html )
-#
-#  This software is governed either by the CeCILL or the CeCILL-C license
-#  under French law and abiding by the rules of distribution of free software.
-#  You can  use, modify and or redistribute the software under the terms of
-#  the CeCILL or CeCILL-C licenses as circulated by CEA, CNRS and INRIA
-#  at the following URL: "http://www.cecill.info".
-#
-#  As a counterpart to the access to the source code and  rights to copy,
-#  modify and redistribute granted by the license, users are provided only
-#  with a limited warranty  and the software's author,  the holder of the
-#  economic rights,  and the successive licensors  have only  limited
-#  liability.
-#
-#  In this respect, the user's attention is drawn to the risks associated
-#  with loading,  using,  modifying and/or developing or reproducing the
-#  software by the user in light of its specific status of free software,
-#  that may mean  that it is complicated to manipulate,  and  that  also
-#  therefore means  that it is reserved for developers  and  experienced
-#  professionals having in-depth computer knowledge. Users are therefore
-#  encouraged to load and test the software's suitability as regards their
-#  requirements in conditions enabling the security of their systems and/or
-#  data to be ensured and,  more generally, to use and operate it in the
-#  same conditions as regards security.
-#
-#  The fact that you are presently reading this means that you have had
-#  knowledge of the CeCILL and CeCILL-C licenses and that you accept its terms.
-#
 
 import numpy as np
 import zlib
 import os
 from PIL import Image
 import torch
+import json
 
 typesDict={'float':'float32' ,'double':'float64',
 'unsigned_short':'uint16','unsigned_char':'uint8',
@@ -94,8 +45,9 @@ def __cimgread( filename ):
         width = int(dimensiones[0]);
         height = int(dimensiones[1]);
         depth = int(dimensiones[2]);
-        spectrum = int(dimensiones[3]);    
-
+        spectrum = int(dimensiones[3]);
+        if width==0:
+            continue
         if file_extension == '.cimgz':
             csize= int(dimensiones[4].decode()[1:])
             data = fa.read(csize)
@@ -114,72 +66,8 @@ def __cimgread( filename ):
         return out[0]
     return out
 
-def cimgread_tomate(filename):
-    a=__cimgread(filename)
-    apil=[]
-
-    
-    for aa in a:
-        pil=Image.fromarray(aa[:,:,:4].astype(np.uint8))
-        apil.append(pil)
-    
-    return apil
-
-def lee_vistas_RGBNIR_from_cimg(filename,crop_size):
-    a=__cimgread(filename)
-    apil=[]
-    for aa in a:
-        canales=[]
-        
-        if aa.shape[2]==4:
-            rgb=aa[:,:,:3].astype('float32')/255
-            rgb[rgb>1]=1
-            rgb=torch.tensor(rgb)
-            canales.append(rgb.permute(2,0,1))
-            nir=aa[:,:,3:].astype('float32')/1023
-            nir[nir>1]=1
-            nir=torch.tensor(nir)
-            canales.append(nir.permute(2,0,1))
-        elif aa.shape[2]==6:
-            rgb=aa[:,:,:3].astype('float32')/255
-            rgb[rgb>1]=1
-            rgb=torch.tensor(rgb)
-            canales.append(rgb.permute(2,0,1))
-            nir=aa[:,:,3:4].astype('float32')/255
-            nir[nir>1]=1
-            nir=torch.tensor(nir)
-            canales.append(nir.permute(2,0,1))
-        elif aa.shape[2]==5:
-            rgb=aa[:,:,:3].astype('float32')/255
-            rgb[rgb>1]=1
-            rgb=torch.tensor(rgb)
-            canales.append(rgb.permute(2,0,1))
-            nir=aa[:,:,3:4].astype('float32')/1023
-            nir[nir>1]=1
-            nir=torch.tensor(nir)
-            canales.append(nir.permute(2,0,1))
-            uv=aa[:,:,4:5].astype('float32')/1023
-            uv[uv>1]=1
-            uv=torch.tensor(uv)
-            canales.append(uv.permute(2,0,1))
-        elif aa.shape[2]==3:
-            print('No hay NIR, solo RGB')
-            im=aa[:,:,:].astype('float32')/255
-            im[im>1]=1
-            canales.append(torch.tensor(im).permute(2,0,1))
-        canales=torch.concat(canales,0)
-        if crop_size is not None:
-            h=canales.shape[1]
-            w=canales.shape[2]
-            fila_ini= int((h - crop_size[0])//2)
-            fila_fin=-fila_ini
-            col_ini=int(w-crop_size[1])//2
-            col_fin=-col_ini
-            canales=canales[:,fila_ini:fila_fin,col_ini:col_fin]
-        apil.append(canales)     
-    return apil
-
-def cimgread(filename):
+def cimgread(filename): 
+    '''Devuelve lista de PILS'''
     a=__cimgread(filename)
     apil=[]
 
@@ -192,4 +80,191 @@ def cimgread(filename):
 
 def cimgread_np(filename):
     a=__cimgread(filename)  
-    return a    
+    return a   
+
+def __cimglistread( filename ):
+    """ USAGE: a= cimgread(filename)
+    For CImg Images:
+        * returns a npy array in the case of cimg
+        * Supports compression
+        * It squeezes singleton dimensions. If a CImg image has dimensions (w,h,1,c)
+            the returned python object will have shape
+                a.shape --> (h,w,c)
+        * a(y,x,z,c) to access one element
+    For CImgList:
+        * returns a list of npy arrays
+        * if original CImgList has nimages, then
+             len(a) --> nimages
+        * To access one pixel of the j-th image use a[j](y,x,z,c)
+
+        """
+
+    basename, file_extension = os.path.splitext(filename)
+    fa = open(filename, 'rb')
+
+    out =[]
+    line0 = fa.readline() #Endiannes
+    tiposdato=line0.split()
+    number_of_images=int(tiposdato[0])
+    datatypecimg=tiposdato[1].decode()
+    endiannes = tiposdato[2]
+    # print('Filename:',filename)
+    # print('Number of images:',number_of_images)
+    # print('CimgDataType:',datatypecimg)
+
+    datatype = typesDict[datatypecimg];
+    # print('DataType:',datatype)
+
+    for n in range(number_of_images):
+        line1 = fa.readline() # Dimensionz
+        dimensiones = line1.split()
+        # print(line1)
+        # print(dimensiones)
+        width = int(dimensiones[0]);
+        height = int(dimensiones[1]);
+        depth = int(dimensiones[2]);
+        spectrum = int(dimensiones[3]);
+        if width==0:
+            # print("skipping empty image")
+            continue
+
+
+        #if file_extension == '.cimgz':
+        if len(dimensiones) > 4:
+            csize= int(dimensiones[4].decode()[1:])
+            data = fa.read(csize)
+            data = zlib.decompress(data)
+        else:
+            data = fa.read(width*height*depth*spectrum*np.dtype(datatype).itemsize)
+
+        flattened = np.frombuffer(data,dtype=datatype)
+
+        cimg=flattened.reshape((spectrum,depth,height,width))
+        cimg=np.squeeze(np.transpose(cimg,(2,3,1,0)))
+        out.append(cimg)
+    fa.close()
+    return out
+
+
+def cimglistread_torch(filename,max_value,channel_list=None):
+    '''
+    A partir de una lista de numpys de cualquier tipo de dato
+    Devuelve una lista de tensores
+    de tipo float32
+    normalizado por max_value
+    Los ejes en el orden (color,fila,columna)
+    
+    SE QUEDA SOLO CON EL RGB
+    '''
+    numpys =__cimglistread(filename) # Es una lista de npys
+
+    #print('Channel list cimgRead: ',channel_list)
+
+    tensores=[]
+    if channel_list is None:
+        for a in numpys:
+            t=torch.permute( torch.from_numpy(a[:,:,:3].copy()).to(torch.float32)/max_value, (2,0,1)).clip(0.0,1.0)
+            tensores.append(t)
+    else:
+        for a in numpys:
+            t=torch.permute( torch.from_numpy(a[:,:,channel_list].copy()).to(torch.float32)/max_value, (2,0,1)).clip(0.0,1.0)
+            tensores.append(t)
+
+    
+    return tensores
+
+
+def npzread_torch(nombre_img,nombre_json=None,maxval=None,channel_list=None):
+    ''' Lee un npz y devuelve una lista de tensores
+    de tipo float32
+     normalizado por max_value
+    Los ejes en el orden (color,fila,columna)'''
+    npz_file = np.load(nombre_img)
+    maxvalue = None
+    channels = None
+    if nombre_json is not None:
+        with open(nombre_json) as f:
+            data=json.load(f)
+        #print(data)
+        channels=data['channels'].split(';')
+        maxvalue=data['maxValChannels']
+    else:
+        maxvalue=maxval
+        channels=channel_list
+    assert channels is not None
+    assert maxvalue is not None
+    #print(channels)
+    channels_dict={}
+    for c,v in enumerate(channels):
+        channels_dict[v]=c
+    #print(channels_dict)
+    
+    
+
+
+# List the keys (names of the arrays inside the .npz file)
+    #print("Arrays in the .npz file:", len(npz_file.files), npz_file.files)
+
+    num_vistas = len(npz_file.files)
+    num_planos = npz_file[npz_file.files[0]].shape[0]
+
+    vistas=[]
+
+    for view in npz_file:
+        vista_allchannels=npz_file[view]
+        lista_canales=[]
+        for channel in channel_list:
+            channel_idx=channels_dict[channel]
+            canal=vista_allchannels[channel_idx]
+            lista_canales.append(canal)
+        vista=np.stack(lista_canales,axis=0)
+        vista=vista.astype(np.float32)/maxvalue
+        vista=torch.from_numpy(vista)
+        
+        vistas.append(vista)
+    return vistas
+    
+
+def npzread_auxB1(nombre_img,nombre_json):
+    ''' Lee un npz y devuelve una lista de tensores
+    de tipo in16
+     
+    con la mascara auxB1'''
+    npz_file = np.load(nombre_img)
+
+    with open(nombre_json) as f:
+        data=json.load(f)
+
+    channels=data['channels'].split(';')
+    #print(channels)
+    channels_dict={}
+    for c,v in enumerate(channels):
+        channels_dict[v]=c
+    
+    auxb1idx=channels_dict['AuxB1']
+    
+    
+
+    vistas=[]
+
+    for view in npz_file:
+        vista_allchannels=npz_file[view]
+        lista_canales=[]
+
+        canal=vista_allchannels[auxb1idx]        
+        vista=torch.from_numpy(canal)
+        
+        vistas.append(vista)
+    return vistas
+
+
+def torch2npz(lista_tensores,nombrenpz,maxval=1023):
+    ''' Guarda una lista de tensores en un npz
+    normalizando por maxval'''
+    lista_npys=[]
+    for tensor in lista_tensores:
+        tensor *=maxval
+        npy=tensor.numpy().astype(np.uint16)
+        lista_npys.append(npy)
+    np.savez(nombrenpz,*lista_npys)
+    

@@ -13,7 +13,7 @@ import pytorch_lightning as pl
 import json
 
 
-from modelos import resnet50MIL, deeplabv3resnet50
+from modelos import resnet50, deeplabv3resnet50
 
 
 #from torchsummary import summary

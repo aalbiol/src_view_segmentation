@@ -12,6 +12,7 @@ import math
 from PIL import Image
 import sys
 from tqdm import tqdm   
+import pycimg
 
 
 def parse_json(filename):
@@ -44,6 +45,32 @@ def extract_one_hot(d,tipos_defecto):
             v.append(math.nan)
 
     return torch.tensor(v)
+
+def extract_one_hot_views(d,tipos_defecto):
+    if "views_annotations" not in d:
+        return None
+    anot_vistas =d['views_annotations']
+    anot2={}
+    num_vistas=len(anot_vistas)
+
+    onehot_matrix=torch.zeros(num_vistas,len(tipos_defecto))
+    for vista_id,vista_anots in anot_vistas.items():
+        num_vista=int(vista_id.split('_')[-1])
+        vista_anots_lower={} # Por si están en minusculas
+        for k,v in vista_anots.items():
+            vista_anots_lower[k.lower()]=v
+
+        for def_k,defecto in enumerate(tipos_defecto):
+            if defecto in vista_anots_lower:
+                tmp=vista_anots_lower[defecto]
+                if isinstance(tmp,str):
+                    tmp=float(tmp)
+                if tmp <0 :
+                    tmp=math.nan            
+            else:
+                tmp=math.nan
+            onehot_matrix[num_vista,def_k]=tmp
+    return onehot_matrix
 
 def extract_masks(d, tipos_defecto):
     ''' Extrae del diccionario del json las posibles máscaras de segmentación
@@ -80,13 +107,23 @@ def lee_pngChannel(filename,max_value):
 
 
 
+def lee_npz(nombrenpz,channel_list=None):
+    nombrejson=nombrenpz.replace('.npz','.json')
+    vistas = pycimg.npzread_torch(nombrenpz,nombrejson,channel_list=channel_list)
+    return vistas
 
 
-
-def lee_vista(images_folder,view_id,terminaciones,maxValues,crop_size):
+def lee_vista(images_folder,view_id,terminaciones,maxValues,crop_size,channel_list=None):
     nombre_base=os.path.join(images_folder,view_id) 
     canales=[]
     indice =0
+    if len(terminaciones)==1 and "npz" in terminaciones[0]:
+      
+        nombrenpz=os.path.join(images_folder,view_id+terminaciones[0])
+        nombrejson=nombrenpz.replace('.npz','.json')
+        canales = pycimg.npzread_torch(nombrenpz,nombrejson,channel_list=channel_list)
+
+        return canales
     for t in terminaciones:
         nombre=nombre_base+t
         canal=lee_pngChannel(nombre,maxValues[indice]) # Devuelve un tensor de la imagen normalizada
@@ -178,10 +215,14 @@ def fruit_id(filename,delimiter):
 
     '''
     basename=os.path.basename(filename)
-    id=basename.split(delimiter)
 
-    id=id[:-1]
-    id=delimiter.join(id)
+    if delimiter is not None:
+        id=basename.split(delimiter)
+
+        id=id[:-1]
+        id=delimiter.join(id)
+    else:
+        id=basename
 
     return id
 
@@ -229,10 +270,11 @@ def GetMaxValues( images_folder, json_file, sufijos):
 
 
 def  genera_ds_jsons_multilabel(root,  dataplaces, sufijos=None,maxValues=None, training_size=(120,120), crop_size=(120,120),defect_types=None,splitname_delimiter='-',
-                               multilabel=True, in_memory=True, use_masks=False):
+                               multilabel=True, in_memory=True, use_masks=False,channel_list=None):
     assert sufijos is not None
 
     print("USe masks: ", use_masks) 
+    print("Genera_ds_jsons_multilabel CHANNEL LIST: ", channel_list)
     json_files=[]
     imags_directorio=[]
     for place in dataplaces:
@@ -304,43 +346,39 @@ def  genera_ds_jsons_multilabel(root,  dataplaces, sufijos=None,maxValues=None, 
         f_id=fruit_id(json_file,splitname_delimiter)        
         d=parse_json(json_file)    
 
+
+
         v_id=view_id(json_file)
         imags_folder= fruto[1]
-        
+         
         
         if in_memory:
-            channels=lee_vista(imags_folder,v_id,sufijos,maxValues,crop_size=crop_size)
+            channels=lee_vista(imags_folder,v_id,sufijos,maxValues,crop_size=crop_size,channel_list=channel_list)
             bin_masks=lee_mascaras(imags_folder,v_id,'_RGB_mask.png',max_value_mask,crop_size,d,tipos_defecto,use_masks)
         else:
             channels=None
             bin_masks=None
-
-        onehot=extract_one_hot(d,tipos_defecto)
-        #print('Reading ', json_file, onehot)
-
-        if multilabel==False and onehot.sum()> 1: #skip instances with multiple labels if multiclass
-            continue
-        if multilabel==False:
-            onehot = add_good_category(onehot)
-        
-        dict_vista={'fruit_id':f_id, 'view_id':v_id, 'image': channels, 'labels': onehot, 
-                    'imag_folder': imags_folder, 'sufijos': sufijos, 'maxValues':maxValues, 'crop_size':crop_size, 
-                    'bin_masks':bin_masks, 'dict_json':d, 'tipos_defecto': tipos_defecto
-                    } 
-        
-        if bin_masks is None:
-            #print('Posiblemente not in memory')
-            pass
-        else:
-            for m in bin_masks:
-                if m is None:
-                    pass
-                    #print('Mascara no disponible para el defecto')
-                else:
-                    pass #print('BIN MASK for fruit_id',v_id)
+        if len(sufijos) ==1 and  "npz" in sufijos[0]:
+            onehot_views = extract_one_hot_views(d,tipos_defecto)
+            if onehot_views is None:
+                print("\t >> Missing views annotations in json file: ",os.path.basename(json_file))
+                continue
             
-
-        out.append(dict_vista)
+            for k,onehot in enumerate(onehot_views):
+                image=channels[k]
+                dict_vista={'fruit_id':f_id, 'view_id':k, 'image': image, 'labels': onehot, 
+                        'imag_folder': imags_folder, 'sufijos': sufijos, 'maxValues':maxValues, 'crop_size':crop_size, 
+                        'bin_masks':bin_masks, 'dict_json':d, 'tipos_defecto': tipos_defecto,"channel_list":channel_list
+                        } 
+                
+                out.append(dict_vista)
+        else:
+            onehot=extract_one_hot(d,tipos_defecto)
+            dict_vista={'fruit_id':f_id, 'view_id':v_id, 'image': channels, 'labels': onehot, 
+                        'imag_folder': imags_folder, 'sufijos': sufijos, 'maxValues':maxValues, 'crop_size':crop_size, 
+                        'bin_masks':bin_masks, 'dict_json':d, 'tipos_defecto': tipos_defecto,"channel_list":channel_list
+                        } 
+            out.append(dict_vista)
 
     
     
@@ -373,8 +411,9 @@ def GetImgRectSize(caso):
         sufijos=caso['sufijos']
         maxValues=caso['maxValues']
         crop_size=caso['crop_size']
+        channel_list=caso['channel_list']
         #print("Reading ", view_id)
-        image=lee_vista(imags_folder,view_id,sufijos,maxValues,crop_size=crop_size)
+        image=lee_vista(imags_folder,view_id,sufijos,maxValues,crop_size=crop_size,channel_list=channel_list)
     
     print("****VIew id***", view_id)
     print("****Image shape***",image.shape)
@@ -396,9 +435,14 @@ def calcula_media_y_stds(trainset):
             sufijos=caso['sufijos']
             maxValues=caso['maxValues']
             crop_size=caso['crop_size']
+            channel_list=caso['channel_list']
             #print("Reading ", view_id)
-            image=lee_vista(imags_folder,view_id,sufijos,maxValues,crop_size=crop_size)
+            image=lee_vista(imags_folder,view_id,sufijos,maxValues,crop_size=crop_size,channel_list=channel_list)
+        if isinstance(image,list):
+            print(">> Tomando la vista ",view_id)
+            image=image[view_id]
         
+
         mask=torch.all(image>0,dim=0)
         
         area=torch.sum(mask)

@@ -64,6 +64,7 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         self.min_negative_fraction=config['train']['min_negative_fraction']
         self.crop_size=config['data']['crop_size']
         self.training_size=config['data']['training_size']
+        self.image_size=config['data']['training_size']
         
 
         print("SegmentMIL Area Minima Defecto:", self.area_minima)
@@ -257,6 +258,7 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
 
         pesos_clase=torch.tensor(self.lista_pesos_clase,device=self.device)
         pesos_clase/=pesos_clase.sum()
+        
         loss_cross_entropy = torch.sum(torch.stack(losses)*pesos_clase) # suma ponderada de los losses por clase
      
         
@@ -300,7 +302,7 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
             warmup_lr_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_iter)
             schedulers = [warmup_lr_scheduler, ExponentialLR(optimizer, gamma=gamma) ]
         else:
-           schedulers = [ ExponentialLR(optimizer, gamma=0.99) ] 
+           schedulers = [ ExponentialLR(optimizer, gamma=gamma) ] 
         return [optimizer],schedulers
 
 
@@ -366,7 +368,15 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
             casos=batch['casos']
         else:
             casos=batch['view_ids']
+            
+        casos_txt=[]
+        for c in casos:
+            if isinstance(c,str):
+                casos_txt.append(c)
+            else:
+                casos_txt.append("_"+str(c))
         
+        casos=casos_txt
         casos=[ os.path.join(c[0],c[1]) for c in zip(folders,casos)]
                
         logits_pixels, aggregation = self.forward_train(images)
@@ -611,4 +621,69 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
             resultados.append(resultado)
 
         return resultados
+
+
+
+    def predictnpzs(self, nombres,device,include_images=False,remove_suffix=True):
+        '''
+        lista de nombres de frutos npz
+
+        Cada npz tiene varias vistas
+
+        Cada npz debe tener un json asociado para saber qué canales tiene. Debe estar en la misma carpeta que el npz.
+
+        '''
+        
+        if not isinstance(nombres ,list):
+            nombres=[nombres]
+        self.eval()
+        #print(device)
+        self.to(device)
+        resultados=[]
+ 
+ 
+
+        transformacion=transforms.Compose([
+        transforms.Resize(self.training_size),
+        transforms.Normalize(self.normalization_dict['means_norm'],self.normalization_dict['stds_norm'])
+        ])
+  
+        channel_list=self.config['data']['channel_list']
+        for nombre in nombres:
+            #print("Processing ",nombre)
+            vistas=m_dataLoad_json.lee_npz(nombre,channel_list=channel_list)           
+            #print("xminmax=",x.min, x.max,x.shape)
+            for j, x in enumerate(vistas):
+                im=x.to(device)
+            #print(transformacion)
+                normalizada=transformacion(im)
+            #print("normalizada=",normalizada.min(),normalizada.max(),normalizada.shape)
+            
+                with torch.no_grad():
+                    logits_pixels,aggregation=self.forward_train(normalizada.unsqueeze(0))
+
+                probs_pixels=F.sigmoid(logits_pixels)
+            
+            #print("probs_pixels=",probs_pixels.min(),probs_pixels.max(),probs_pixels.shape)
+            
+                w=im.shape[2]
+                h=im.shape[1]
+                probs_pixeles_tam_original=transforms.Resize([h,w])(probs_pixels)
+
+                
+                im=im.cpu().numpy().transpose(1,2,0)
+            
+                probsvista_dict={}
+                for i in range(self.num_classes):
+                    probsvista_dict[self.class_names[i]]=probs_pixeles_tam_original.cpu()[0,i].numpy()
+                resultado={'imgname':nombre,'pixel_probs_dict':probsvista_dict,
+                        'pixel_probs_tensor':probs_pixeles_tam_original.cpu(),
+                        "view_id":j}
+                if include_images:
+                    resultado['img']=im
+
+                resultados.append(resultado)
+
+        return resultados
+
 

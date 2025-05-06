@@ -96,8 +96,9 @@ class ViewsDataSet(Dataset):
             crop_size=caso['crop_size']
             d=caso['dict_json']
             tipos_defecto=caso['tipos_defecto']
+            channel_list=caso['channel_list']
             #print("Reading ", view_id)
-            imagen=m_dataLoad_json.lee_vista(imags_folder,view_id,sufijos,maxValues,crop_size=crop_size)
+            imagen=m_dataLoad_json.lee_vista(imags_folder,view_id,sufijos,maxValues,crop_size=crop_size,channel_list=channel_list)
             bin_masks=m_dataLoad_json.lee_mascaras(imags_folder,view_id,'_RGB_mask.png',255,
                                                    crop_size,d,tipos_defecto,self.use_masks)          
         if self.transform is not None:              
@@ -196,6 +197,13 @@ class DataModule(pl.LightningDataModule):
         self.trainset=None
         self.valset=None
         self.predset=None
+        if "channel_list" in config['data']:
+            self.channel_list=config['data']['channel_list']
+            print("Canales de entrada leidos del config", self.channel_list)
+            
+        else:
+            print("No hay lista de canales en el config, se usaran todos los canales")
+            self.channel_list=None
         train_dataplaces=config['data']['train']
         val_dataplaces=config['data']['val']
         
@@ -211,7 +219,8 @@ class DataModule(pl.LightningDataModule):
                                                                                                     multilabel=True,
                                                                                                     splitname_delimiter=config['data']['delimiter'],
                                                                                                     in_memory=config['train']['in_memory'],
-                                                                                                    use_masks=config['data']['use_segmentation_masks'])
+                                                                                                    use_masks=config['data']['use_segmentation_masks'],
+                                                                                                    channel_list=self.channel_list)
 
         if val_dataplaces is not None:
             print("\nGenerating validation dataset...")
@@ -225,7 +234,8 @@ class DataModule(pl.LightningDataModule):
                                                                                                     multilabel=True,
                                                                                                     splitname_delimiter=config['data']['delimiter'],
                                                                                                     in_memory=config['train']['in_memory'],
-                                                                                                    use_masks=config['data']['use_segmentation_masks'])
+                                                                                                    use_masks=config['data']['use_segmentation_masks'],
+                                                                                                    channel_list=self.channel_list)
           
 
         
