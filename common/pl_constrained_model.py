@@ -67,6 +67,16 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         self.image_size=config['data']['training_size']
         
 
+    ## El área mínima puede ser un número o una lista de números. Si es un número, se repite para cada clase.
+        if isinstance(self.area_minima,list):
+            assert len(self.area_minima) == self.num_classes, 'Area minima debe ser una lista con el mismo número de elementos que clases'
+        else:
+            self.area_minima=[self.area_minima]*self.num_classes
+        if isinstance(self.min_negative_fraction,list):
+            assert len(self.min_negative_fraction) == self.num_classes, 'Area minima debe ser una lista con el mismo número de elementos que clases'
+        else:
+            self.min_negative_fraction=[self.min_negative_fraction]*self.num_classes
+
         print("SegmentMIL Area Minima Defecto:", self.area_minima)
         print('ConstrainWeight:',self.constrain_weight)
         
@@ -143,7 +153,7 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         return top_logits_ordered,prob_defecto,probs_pixeles 
     
     
-    def aggregate_train(self,logits_pixeles):
+    def aggregate_train_old(self,logits_pixeles):
         '''
         La entrada de la función son los logits de la salida del modelo de dimensiones (batch_size, num_classes, H, W)
         Devuelve tres listas:
@@ -165,6 +175,36 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         
         return top_logits_ordered,prob_defecto,bottom_logits_ordered 
     
+    def aggregate_train(self,logits_pixeles):
+        '''
+        La entrada de la función son los logits de la salida del modelo de dimensiones (batch_size, num_classes, H, W)
+        Devuelve tres listas:
+            -	top_logits_ordered: los top K logits para cada clase de cada vista del batch. (batch_size x num classes x K)
+            -	prob_defecto: la media de las probabilidades para cada clase. (batch_size x num classes)
+            -	bottom_logits_ordered: los N logits más pequeños, siendo N el número mínimo de pixeles negativos (que no tengan ninguna clase). 
+                Con esto se fuerza a que si no hay ninguna clase, la probabilidad en esos pixeles sea bajo, próxima a 0. (batch_size x num classes x N)
+        '''
+        tam = logits_pixeles.shape
+        logits_patches_reshaped = torch.reshape(logits_pixeles , (tam[0],tam[1], tam[2]*tam[3] ) )
+        
+        nclases=logits_patches_reshaped.shape[1]
+        lista_top_logits_ordered=[]
+        lista_bottom_logits_ordered=[]  
+        for i in range(nclases):
+            logits_patches_reshaped_i=logits_patches_reshaped[:,i,:]
+            top_logits_ordered_i = torch.topk(logits_patches_reshaped_i,self.area_minima[i], dim=-1)[0] 
+            lista_top_logits_ordered.append(top_logits_ordered_i)
+            ngood_pixels=int(self.min_negative_fraction[i] * logits_pixeles.shape[2]*logits_pixeles.shape[3])
+            bottom_logits_ordered_i = -torch.topk(-logits_patches_reshaped_i,ngood_pixels, dim=-1)[0]
+            lista_bottom_logits_ordered.append(bottom_logits_ordered_i)
+
+
+        
+        prob_defecto = torch.mean(torch.sigmoid(logits_pixeles),axis=(2,3)) 
+        
+        #self.fraccion_minima= self.area_minima/(logits_pixeles.shape[2]*logits_pixeles.shape[3] )
+        
+        return lista_top_logits_ordered,prob_defecto,lista_bottom_logits_ordered 
                 
     def forward_predict(self, X):# Para predicciones
         logits_pixeles=self.modelo(X)
@@ -177,7 +217,7 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         return logits_pixeles, aggregation
 
 
-    def criterion(self, logits_pixeles,aggregation,  labels, bin_masks):#Recibe batch_size x (numclases)
+    def criterion_old(self, logits_pixeles,aggregation,  labels, bin_masks):#Recibe batch_size x (numclases)
         '''
         labels: lista con batch_size elementos. Cada elemento tiene tantos elementos como etiquetas tenga la vista
         logits_pixeles: logits de dims (batch_size,num_classes, H, W) 
@@ -274,6 +314,109 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
         loss_constrain_max_area = torch.mean(loss_constrain_max_area)
         
         
+        global_loss=loss_cross_entropy + self.constrain_weight * loss_constrain_max_area +self.bottom_constrain_weight*bottom_loss
+        #print(f'Losses: BCE={loss_cross_entropy}, constrain={loss_constrain_max_area}, global={global_loss} ')
+        
+        return global_loss, loss_cross_entropy, self.constrain_weight *loss_constrain_max_area, bottom_loss
+
+
+    def criterion(self, logits_pixeles,aggregation,  labels, bin_masks):#Recibe batch_size x (numclases)
+        '''
+        labels: lista con batch_size elementos. Cada elemento tiene tantos elementos como etiquetas tenga la vista
+        logits_pixeles: logits de dims (batch_size,num_classes, H, W) 
+        bin_masks: máscaras binarias -> dims (batch_size, num_classes, H, W), si no existe la máscara, entonces será None
+
+        Devuelve cuatro funciones de perdidas:
+        - loss_cross_entropy: BCE loss. Se calcula entre los top k logits y las etiquetas si no hay máscara.
+                                Si hay máscara, se calcula entre los logits_pixeles y la máscara binaria.
+
+        - bottom_loss: media del Binary Cross Entropy Loss entre los bottom_logits y cero, quedando (batch_size x 1 x 1)
+
+        - loss_constrain_max_area: A partir de las probabilidades de defecto, se obitene la probabilidad de que sea bueno. 
+            Y se calcula la media del resultado de calcular: ReLU(min_negative_fraction – prob_bueno)^2. (batch_size x 1 x 1).
+
+        - global_loss: suma ponderada de las tres losses anteriores
+
+        '''
+
+        top_logits=aggregation[0] # Top K logits para cada clase (batch_size x num_classes x K)
+        prob_defecto=aggregation[1] # Media de las probs para cada clase (batch_size x num_classes)
+        bottom_logits=aggregation[2] # N logits más pequeños. (batch_size, num_classes, N)
+        
+        #target_fracciones_minimas=labels * self.fraccion_minima
+        bcelogitsloss=nn.BCEWithLogitsLoss(reduction='mean')
+        
+        ntipos_defecto=logits_pixeles.shape[1]
+        
+        batch_size=labels.shape[0]
+
+        losses=[]
+        bottom_losses=[]
+        smoothed_labels=(1-self.label_smoothing)*labels + self.label_smoothing/2 # Para multilabel cada label es binaria
+        smoothed_bin_masks=[]
+        for b in range(batch_size):
+            batch_element_class_smoothed_masks=[]
+            for jj in range(ntipos_defecto):
+                if bin_masks[b][jj] is not None:
+                    batch_element_class_smoothed_masks.append((1-self.label_smoothing)*bin_masks[b][jj]+ self.label_smoothing /2)
+                else:
+                    batch_element_class_smoothed_masks.append(None)
+            smoothed_bin_masks.append(batch_element_class_smoothed_masks)
+        
+        for k in range(ntipos_defecto): # para cada clase
+            listapesos=[]
+            class_mean_losses=[]
+            for b in range(batch_size): # para cada elemento b del batch 
+                bm_b=smoothed_bin_masks[b] # Máscaras binaria del elemento b del batch
+                labels_b=smoothed_labels[b] # Etiquetas del elemento b del batch
+               
+                logits_pixeles_b=logits_pixeles[b]
+                
+                
+                logits=top_logits[k][b] # los toppixeles de la clase k del elemento b del batch
+                target=labels_b[k] # Este tipo de defecto en esta vista
+                if target.isnan().any():
+                    continue
+            
+                if bm_b[k] is  None: # No hay mascara binaria para la clase k de la vista b
+                                             
+                    batch_element_class_loss = bcelogitsloss(logits,torch.full_like(logits,target))#create tensor same size as logits with target values
+                    listapesos.append(1.0)
+                    bottom_loss = bcelogitsloss(bottom_logits[k][b],torch.zeros_like(bottom_logits[k][b]))
+                    bottom_losses.append(bottom_loss)                
+                else: # Hay máscara binaria
+                    batch_element_class_loss = self.binmask_weight*bcelogitsloss(logits_pixeles_b[k],bm_b[k])
+                    listapesos.append(self.binmask_weight) #asignar peso > 1 ya que hay muchas menos imagenes con mascara
+            
+                class_mean_losses.append(batch_element_class_loss) # se generará una lista de batch_size elementos para cada clase
+            if len(class_mean_losses)==0:
+                print(" *** No hay elementos en la clase ",self.class_names[k])
+                losses.append(torch.tensor(0.0,device=self.device))
+            else:
+                class_losses=torch.stack(class_mean_losses)#batch_size
+                listapesostensor=torch.tensor(listapesos)
+                loss_cross_entropyc=torch.sum(class_losses)/listapesostensor.sum() #media ponderada de los losses de un batch de una clase
+                losses.append(loss_cross_entropyc) # será una lista de n_classes elementos
+
+
+        pesos_clase=torch.tensor(self.lista_pesos_clase,device=self.device)
+        pesos_clase/=pesos_clase.sum()
+        
+        loss_cross_entropy = torch.sum(torch.stack(losses)*pesos_clase) # suma ponderada de los losses por clase
+     
+        
+        bottom_loss=torch.mean(torch.tensor(bottom_losses))
+        if loss_cross_entropy.isnan().any():
+            print("Loss cross entropy is nan", loss_cross_entropy)
+            print('class_losses stack',class_losses)
+            print('targets',labels)
+            self.logger.experiment.finish()
+            exit()
+        # prob_good=1-prob_defecto # probabilidad de que no esté el defecto (batch_size, num_classes)
+        # loss_constrain_max_area= torch.relu(self.min_negative_fraction-prob_good)**2
+        # loss_constrain_max_area = torch.mean(loss_constrain_max_area)
+        
+        loss_constrain_max_area=0
         global_loss=loss_cross_entropy + self.constrain_weight * loss_constrain_max_area +self.bottom_constrain_weight*bottom_loss
         #print(f'Losses: BCE={loss_cross_entropy}, constrain={loss_constrain_max_area}, global={global_loss} ')
         
@@ -392,9 +535,11 @@ class  ConstrainedSegmentMIL(pl.LightningModule):
             print('Casos',casos)
             exit()
         # Computing metrics 
-        top_logits=aggregation[0] # Top K logits para cada clase (batch_size x num_classes x K)
-        logits_vista=torch.mean(top_logits,dim=2) # Media de los top K logits para cada clase (batch_size x num_classes)
+        top_logits=aggregation[0] # Lista de nclases
+        logits_vista=[torch.mean(tl,dim=1) for tl in top_logits] # Media de los top K logits para cada clase (batch_size x num_classes)
+        logits_vista=torch.stack(logits_vista,dim=1) # (batch_size x num_classes)
         truths_vista=labels
+        print("type logits_vista:",type(logits_vista))
         self.valpredicts.append(logits_vista)
         self.valtruths.append(truths_vista)
         
